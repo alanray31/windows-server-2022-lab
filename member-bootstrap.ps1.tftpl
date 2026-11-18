@@ -1,0 +1,78 @@
+<powershell>
+$ErrorActionPreference = "Stop"
+$LogPath = "C:\TerraformBootstrap-Member.log"
+Start-Transcript -Path $LogPath -Append
+
+try {
+    $DomainName = "${domain_name}"
+    $NetbiosName = "${netbios_name}"
+    $DomainControllerIp = "${domain_controller_ip}"
+
+    $AdminPasswordText = [System.Text.Encoding]::UTF8.GetString(
+        [System.Convert]::FromBase64String("${local_admin_password_b64}")
+    )
+    $AdminPassword = ConvertTo-SecureString $AdminPasswordText -AsPlainText -Force
+
+    Set-LocalUser -Name "Administrator" -Password $AdminPassword
+
+    $Adapter = Get-NetAdapter |
+        Where-Object { $_.Status -eq "Up" } |
+        Select-Object -First 1
+
+    if ($null -eq $Adapter) {
+        throw "No active network adapter was found."
+    }
+
+    Set-DnsClientServerAddress `
+        -InterfaceIndex $Adapter.ifIndex `
+        -ServerAddresses $DomainControllerIp
+
+    $Ready = $false
+
+    for ($Attempt = 1; $Attempt -le 60; $Attempt++) {
+        $PortReady = Test-NetConnection `
+            -ComputerName $DomainControllerIp `
+            -Port 389 `
+            -InformationLevel Quiet `
+            -WarningAction SilentlyContinue
+
+        if ($PortReady) {
+            try {
+                Resolve-DnsName `
+                    -Name $DomainName `
+                    -Server $DomainControllerIp `
+                    -ErrorAction Stop | Out-Null
+
+                $Ready = $true
+                break
+            }
+            catch {
+                Start-Sleep -Seconds 30
+            }
+        }
+        else {
+            Start-Sleep -Seconds 30
+        }
+    }
+
+    if (-not $Ready) {
+        throw "Domain controller did not become ready within 30 minutes."
+    }
+
+    $Credential = New-Object System.Management.Automation.PSCredential(
+        "$NetbiosName\Administrator",
+        $AdminPassword
+    )
+
+    Add-Computer `
+        -DomainName $DomainName `
+        -Credential $Credential `
+        -Force `
+        -Restart
+}
+catch {
+    $_ | Out-File -FilePath $LogPath -Append -Encoding utf8
+    Stop-Transcript
+    throw
+}
+</powershell>
