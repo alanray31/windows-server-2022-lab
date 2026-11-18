@@ -1,0 +1,43 @@
+<powershell>
+$ErrorActionPreference = "Stop"
+$LogPath = "C:\TerraformBootstrap-DC.log"
+Start-Transcript -Path $LogPath -Append
+
+try {
+    $DomainName = "${domain_name}"
+    $NetbiosName = "${netbios_name}"
+
+    $AdminPasswordText = [System.Text.Encoding]::UTF8.GetString(
+        [System.Convert]::FromBase64String("${local_admin_password_b64}")
+    )
+    $DsrmPasswordText = [System.Text.Encoding]::UTF8.GetString(
+        [System.Convert]::FromBase64String("${dsrm_password_b64}")
+    )
+
+    $AdminPassword = ConvertTo-SecureString $AdminPasswordText -AsPlainText -Force
+    $DsrmPassword = ConvertTo-SecureString $DsrmPasswordText -AsPlainText -Force
+
+    Set-LocalUser -Name "Administrator" -Password $AdminPassword
+
+    Install-WindowsFeature AD-Domain-Services -IncludeManagementTools
+
+    Install-ADDSForest `
+        -DomainName $DomainName `
+        -DomainNetbiosName $NetbiosName `
+        -InstallDNS `
+        -SafeModeAdministratorPassword $DsrmPassword `
+        -Force `
+        -NoRebootOnCompletion
+
+    "Forest promotion completed; restarting." |
+        Out-File -FilePath $LogPath -Append -Encoding utf8
+
+    Stop-Transcript
+    Restart-Computer -Force
+}
+catch {
+    $_ | Out-File -FilePath $LogPath -Append -Encoding utf8
+    Stop-Transcript
+    throw
+}
+</powershell>
